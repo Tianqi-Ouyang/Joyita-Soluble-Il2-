@@ -122,7 +122,7 @@ parse_rpdr_date <- function(x) as.Date(x, format = "%m/%d/%Y")
 ## ICI SCHEDULEDSTARTDTS: ISO-8601 "YYYY-MM-DDThh:mm:ssZ" -> calendar Date.
 ## The date is taken exactly as written (no time-zone shift): the trailing "Z"
 ## is an export artefact, not a real UTC offset -- scheduled hours cluster at
-## 08:00-17:00, i.e. local clinic hours (see data_management.qmd, Table 3).
+## 08:00-17:00, i.e. local clinic hours.
 parse_ici_date <- function(x) {
   ok <- is.na(x) | grepl("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z?$", x)
   if (!all(ok)) stop(sum(!ok), " SCHEDULEDSTARTDTS values are not ISO-8601")
