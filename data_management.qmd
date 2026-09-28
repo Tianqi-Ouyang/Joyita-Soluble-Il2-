@@ -1,0 +1,245 @@
+---
+title: "Soluble IL-2R × ICI — Data Management"
+subtitle: "Inputs, variable changes, result classification and linkage QC"
+author: "Tianqi Ouyang"
+date: "`r Sys.Date()`"
+---
+
+::: {.callout-note}
+## About this page
+
+All patient-level processing happens locally in `R/build.R` (run with
+`Rscript R/build.R`). This page shows the code and the **aggregate** QC tables the
+build writes to `cache/summary.rds`. Counts from 1 to 10 are shown as `<11`.
+:::
+
+```{r}
+#| label: setup
+#| include: false
+suppressPackageStartupMessages({ library(data.table); library(knitr) })
+source("R/functions.R")
+have <- file.exists("cache/summary.rds")
+if (have) S <- readRDS("cache/summary.rds")
+```
+
+```{r}
+#| label: not-built
+#| echo: false
+#| output: asis
+if (!have) cat("::: {.callout-warning}\n## Pipeline has not been run\n",
+               "Run `Rscript R/build.R` locally, then re-render.\n:::\n")
+```
+
+```{r}
+#| label: exit
+#| include: false
+if (!have) knitr::knit_exit()
+```
+
+# 1 Data sources
+
+```{r}
+#| label: tbl-sources
+#| echo: false
+data.table(
+  Source = c("RPDR Mrn", "RPDR Lab", "RPDR Med", "RPDR Dia", "ICI data pull"),
+  File   = c(sub("\\{.*", "Mrn.txt", S$files$rpdr), sub("\\{.*", "Lab.txt", S$files$rpdr),
+             sub("\\{.*", "Med.txt", S$files$rpdr), sub("\\{.*", "Dia.txt", S$files$rpdr),
+             S$files$ici),
+  Use    = c("Patient set (one row per patient)",
+             "Soluble IL2R results (plus creatinine, not used here)",
+             "Independent check for ICI exposure",
+             "Malignancy codes, for chart-review triage",
+             "ICI administrations (Epic MAR 'New Bag')"),
+  Rows   = c(fmt_n(S$flow$n[1]), fmt_n(S$lab_rows), fmt_n(S$med_rows), "-", fmt_n(S$ici_rows)),
+  Patients = c(fmt_n(S$flow$n[1]), fmt_n(S$lab_patients), "-", "-", fmt_n(S$ici_patients))) |>
+  kable(caption = "Inputs. The RPDR extract (IRB 2022P001091) was pulled 2026-08-11; the ICI pull is dated 2026-07-17. Neither is in this repository.")
+```
+
+# 2 ICI data pull
+
+## 2.1 Variable changes
+
+Two changes are made when the file is read, so every downstream object uses the
+RPDR conventions:
+
+| Raw | Cleaned | Why |
+|---|---|---|
+| `EMPI MRN` (column G) | `EMPI` | Same name as the RPDR key; joins need no renaming |
+| `SCHEDULEDSTARTDTS` = `YYYY-MM-DDThh:mm:ssZ` | `SCHEDULEDSTARTDTS` = `YYYY-MM-DD` (Date) | ICI timing is compared at the day level |
+
+```{r}
+#| label: code-read-ici
+#| eval: false
+#| code: !expr src_of(c("read_ici", "parse_ici_date"))
+```
+
+```{r}
+#| label: tbl-ici-format
+#| echo: false
+data.table(
+  Check = c("`EMPI` values that are 9 digits (ICI pull)",
+            "`EMPI` values that are 9 digits (RPDR Lab, IL2R rows)",
+            "`SCHEDULEDSTARTDTS` values that failed to parse",
+            "Earliest `SCHEDULEDSTARTDTS` (month)", "Latest `SCHEDULEDSTARTDTS` (month)"),
+  Result = c(sprintf("%.1f%%", 100 * S$ici_empi_9digit),
+             sprintf("%.1f%%", 100 * S$rpdr_empi_9digit),
+             fmt_n(S$ici_date_na),
+             format(S$ici_date_range[1], "%Y-%m"), format(S$ici_date_range[2], "%Y-%m"))) |>
+  kable(caption = "Format checks. Both files carry EMPI as a 9-digit string, so they are joined as character without padding.")
+```
+
+## 2.2 Is the trailing "Z" a real UTC time?
+
+If `SCHEDULEDSTARTDTS` were true UTC, a 09:00 Boston infusion would read 13:00 or
+14:00 and the distribution below would peak in the afternoon. It peaks at 10:00–12:00
+and falls away after 17:00 — ordinary clinic hours — so the clock time is local and
+the `Z` is an export artefact. The calendar date is therefore taken **as written**,
+with no time-zone shift.
+
+```{r}
+#| label: tbl-hour
+#| echo: false
+h <- copy(S$ici_hour)
+h[, bin := fcase(hour <= 7, "00-07", hour >= 19, "19-23", default = sprintf("%02d", hour))]
+h <- h[, .(N = sum(N)), by = bin]
+h[, .(`Scheduled hour (as written)` = bin, Administrations = fmt_n(N),
+      `%` = fmt_pct(N, sum(N)))] |>
+  kable(caption = "Hour of SCHEDULEDSTARTDTS across all ICI administrations.")
+```
+
+## 2.3 What the file contains
+
+```{r}
+#| label: tbl-ici-action
+#| echo: false
+rbind(S$ici_mar_action[, .(Field = "MARACTIONDSC", Value = MARACTIONDSC, N)],
+      S$ici_order_status[, .(Field = "ORDERSTATUSDSC", Value = ORDERSTATUSDSC, N)],
+      S$ici_route[, .(Field = "ROUTEDSC", Value = ROUTEDSC, N)])[
+  , Records := fmt_parts(N), by = Field][, .(Field, Value, Records)] |>
+  kable(caption = "Every row is a MAR 'New Bag' (a dose hung), including the few whose order was later discontinued - so every row counts as ICI given.")
+```
+
+```{r}
+#| label: tbl-ici-generic
+#| echo: false
+gg <- collapse_small(S$ici_generic[order(-patients), .(generic, N = patients)], "generic")
+gg[, .(`ICI (generic)` = generic, Patients = fmt_n(N))] |>
+  kable(caption = sprintf("%s distinct MEDICATIONDSC strings; every one names a known ICI by generic name, sponsor code or brand (%s unmatched). Each product is labelled by the first ICI or fixed-dose co-formulation it names; a patient appears under each label received.", fmt_n(S$ici_drug_desc_n), fmt_n(S$ici_unmatched_desc)))
+```
+
+```{r}
+#| label: tbl-ici-blinded
+#| echo: false
+S$ici_blinded[, .(`Blinded or-placebo product` = fifelse(blinded, "Yes", "No"),
+                  Descriptions = fmt_n(descriptions), Records = fmt_n(records),
+                  Patients = fmt_n(patients))] |>
+  kable(caption = sprintf("Blinded 'X OR PLACEBO' trial products do not establish ICI exposure, so they are left out of the ICI start date. %s patients in the whole pull have only blinded products; %s of them are in the post-2015 IL2R cohort.", fmt_n(S$ici_blinded_only_patients), fmt_n(S$groups[group == GROUP_LEVELS[3], sum(N)])))
+```
+
+```{r}
+#| label: tbl-ici-year
+#| echo: false
+S$ici_by_year[, .(Year = year, Administrations = fmt_n(records), Patients = fmt_n(patients))] |>
+  kable(caption = "ICI administrations by year. Coverage begins mid-2015 with Epic; 2026 is a partial year.")
+```
+
+# 3 RPDR soluble IL2R labs
+
+## 3.1 Tests
+
+```{r}
+#| label: tbl-il2-tests
+#| echo: false
+S$il2_tests[, .(Group_Id, Test_Id, LOINC = Loinc_Code, Unit = unit,
+                Records = fmt_parts(records), Patients = fmt_n(patients),
+                Years = fifelse(records < SMALL_CELL | patients < SMALL_CELL, "--",
+                        fifelse(first_year == last_year, as.character(first_year),
+                                paste0(first_year, "-", last_year))))] |>
+  kable(caption = "The four sIL2R test codes in the Lab file. Creatinine rows in the same file are not used.")
+```
+
+## 3.2 Result classification
+
+```{r}
+#| label: code-classify
+#| eval: false
+#| code: !expr src_of(c("NUM_REGEX", "CANCEL_REGEX", "classify_il2r_result"))
+```
+
+```{r}
+#| label: tbl-il2-status
+#| echo: false
+S$il2_status[, .(`Result class` = as.character(status), Records = fmt_n(records),
+                 Patients = fmt_n(patients), `Counts as a measurement` =
+                   fifelse(status == STATUS_LEVELS[4], "No", "Yes"))] |>
+  kable(caption = "Every IL2R row falls in one class. 'Numeric (Result_Text)' rows have a blank or placeholder Result with the value written in the report text (older mcsq assay).")
+```
+
+```{r}
+#| label: tbl-il2-phrases
+#| echo: false
+p <- copy(S$il2_nonnum_phrases)
+p[N < 3 & !grepl("^\\(", phrase), phrase := "(other short phrases)"]
+p <- p[, .(N = sum(N)), by = .(status, phrase)]
+p[, .(`Result class` = as.character(status), `Result string` = phrase, Records = fmt_n(N))] |>
+  kable(caption = "The Result strings behind the two non-numeric classes (standard lab status text). Strings seen fewer than 3 times are grouped.")
+```
+
+```{r}
+#| label: tbl-il2-values
+#| echo: false
+S$il2_value_summary[, .(Unit = unit, Values = fmt_n(n), Median = round(median),
+                        IQR = paste0(round(p25), "-", round(p75)))] |>
+  kable(caption = sprintf("Numeric IL2R values by unit (all dates). Numeric Result strings with an irregular shape: %s.", fmt_n(S$il2_numeric_irregular)))
+```
+
+## 3.3 Records by year
+
+```{r}
+#| label: tbl-il2-year
+#| echo: false
+y <- copy(S$il2_by_year)
+y[, period := fcase(year <= 2014, "2005-2014", year %between% c(2018, 2020), "2018-2020",
+                    default = as.character(year))]
+y <- y[, .(records = sum(records)), by = period]
+y[, .(`Draw year` = period, `IL2R records` = fmt_n(records))] |>
+  kable(caption = "IL2R rows by year (all result classes). Results before 2015 are excluded from the cohort; the Epic-coded assay begins in 2021.")
+```
+
+# 4 Linkage
+
+```{r}
+#| label: tbl-linkage
+#| echo: false
+data.table(
+  Check = c("IL2R patients (Lab) not in the RPDR patient set",
+            "Post-2015 IL2R patients found in the ICI pull",
+            "Patient-days with 2 or more performed IL2R results"),
+  N = fmt_n(c(S$il2_not_in_set,
+              S$answers[["post_cutoff_patients"]] - S$answers[["q3_not_in_ici_cohort"]],
+              S$il2_same_day_multi))) |>
+  kable(caption = "EMPI linkage between the RPDR extract and the ICI pull, joined on the character EMPI.")
+```
+
+# 5 Full pipeline code
+
+```{r}
+#| label: code-functions
+#| eval: false
+#| file: R/functions.R
+```
+
+```{r}
+#| label: code-build
+#| eval: false
+#| file: R/build.R
+```
+
+```{r}
+#| label: session
+#| echo: false
+#| output: asis
+cat("\n---\n\n*Aggregate results only; cells below 11 suppressed. Built from `R/build.R` on ",
+    format(S$built, "%Y-%m-%d"), ".*\n", sep = "")
+```

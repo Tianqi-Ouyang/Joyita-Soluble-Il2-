@@ -1,0 +1,33 @@
+# Data files (contain PHI -- never commit)
+Data/
+*.xlsx
+*.xls
+*.csv
+*.txt
+*.rds
+
+# Local-only paths and pipeline outputs (EMPI-keyed)
+R/paths_local.R
+cache/
+output/
+
+# Rendered outputs (published to gh-pages by `quarto publish gh-pages`)
+*.html
+*_files/
+*_cache/
+_site/
+
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Quarto
+/.quarto/
+_freeze/
+**/*.quarto_ipynb
+
+# macOS
+.DS_Store

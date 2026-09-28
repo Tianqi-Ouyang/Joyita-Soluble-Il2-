@@ -1,0 +1,46 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - index.qmd
+    - data_management.qmd
+    - analysis.qmd
+
+website:
+  title: "Soluble IL-2R × ICI"
+  description: "Soluble IL-2 receptor draws after immune checkpoint inhibitors: cohort counts (code reference)"
+  site-url: "https://tianqi-ouyang.github.io/Joyita-Soluble-Il2-/"
+  repo-url: "https://github.com/Tianqi-Ouyang/Joyita-Soluble-Il2-"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Overview
+      - href: data_management.qmd
+        text: Data Management
+      - href: analysis.qmd
+        text: Analysis
+  page-footer:
+    left: "© 2026 · Code reference only. No patient data rendered; cells below 11 suppressed"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true         # per-chunk collapsible; click "Show code" to expand
+    code-summary: "Show code"
+    code-tools: false
+    code-copy: true
+    smooth-scroll: true
+    anchor-sections: true
+    fig-width: 10
+    fig-height: 6
+    fig-dpi: 110
+
+execute:
+  eval: true
+  echo: true
+  warning: false
+  message: false
+  freeze: false             # pages only read cache/summary.rds; always re-run

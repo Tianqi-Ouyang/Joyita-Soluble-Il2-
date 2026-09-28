@@ -1,0 +1,72 @@
+---
+title: "Soluble IL-2R × ICI"
+subtitle: "Soluble IL-2 receptor draws before and after immune checkpoint inhibitors"
+---
+
+```{r}
+#| label: setup
+#| include: false
+suppressPackageStartupMessages({ library(data.table); library(knitr) })
+source("R/functions.R")
+have <- file.exists("cache/summary.rds")
+if (have) { S <- readRDS("cache/summary.rds"); a <- S$answers }
+```
+
+## Project overview
+
+This site publishes the Quarto pipeline behind a cohort count for the soluble
+IL-2 receptor (sIL2R, CD25) project: of everyone at Mass General Brigham with an
+sIL2R drawn, **who had already received an immune checkpoint inhibitor (ICI) when
+the level was drawn**, and how many were measured more than once afterwards.
+
+| Stage | File | Role |
+|---|---|---|
+| **Data management** | [`data_management.qmd`](data_management.qmd) | Read the RPDR extract and the ICI pull; rename `EMPI MRN` → `EMPI`; convert `SCHEDULEDSTARTDTS` to a date; classify every IL2R result; linkage QC |
+| **Analysis** | [`analysis.qmd`](analysis.qmd) | Cohort flow, the three requested counts, RPDR medication / diagnosis cross-check, sensitivity analyses |
+
+## The requests
+
+```{r}
+#| label: tbl-headline
+#| echo: false
+if (have) data.table(
+  Request = c("RPDR patient set (sIL2R lab result OR Epic sIL2R order code)",
+              "... with >= 1 sIL2R result row in the RPDR Lab file",
+              "... with >= 1 performed (not cancelled) sIL2R result",
+              "... with >= 1 performed result on/after 2015-01-01 (all-pre-2015 excluded)",
+              "Request 1: had an ICI (any dose) before the sIL2R was drawn",
+              "Request 2: ... and had at least 2 measurements after the ICI",
+              "Request 3: post-2015 patients NOT found in the ICI cohort",
+              "Order but no result row, not in the ICI cohort (undated)"),
+  N = fmt_n(c(S$flow$n, a[["q1_ici_before_draw"]], a[["q2_ge2_after_ici"]],
+              a[["q3_not_in_ici_cohort"]], S$nolab[in_ici_file == FALSE, patients]))) |>
+  kable(caption = "Headline counts (primary definitions; see Analysis for definitions, sensitivity analyses and caveats).")
+```
+
+## Data privacy
+
+Patient-level identifiers (`EMPI`, `MRN`, names, dates of birth) never appear in any
+rendered output. Tables contain only aggregate counts; counts from 1 to 10 are shown
+as `<11`, with a second cell hidden where a total would reveal it.
+
+The raw RPDR extract, the ICI pull, the EMPI-keyed cache and the chart-review
+workbook stay on the local machine and are excluded from this repository by
+`.gitignore`. Only the code and the aggregate results are published here.
+
+## Data sources (local only, not in this repo)
+
+- `ICI_data_pull_07172026.csv`: ICI administrations (Epic MAR, one row per bag hung)
+- RPDR extract `MES98_20260811_112907` (Mrn / Lab / Med / Dia): Mass General Brigham
+  Research Patient Data Registry, pulled 2026-08-11 under IRB 2022P001091
+
+## Reproducing
+
+```bash
+cp R/paths_template.R R/paths_local.R   # then edit the local file paths
+Rscript R/build.R                       # local PHI step -> cache/ and output/
+quarto render                           # aggregate-only site -> _site/
+```
+
+## Dependencies
+
+R packages: `data.table`, `knitr`, `writexl`.

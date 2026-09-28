@@ -1,0 +1,340 @@
+---
+title: "Soluble IL-2R after ICI — Analysis"
+subtitle: "Who had a soluble IL-2 receptor drawn after an immune checkpoint inhibitor?"
+author: "Tianqi Ouyang"
+date: "`r Sys.Date()`"
+execute:
+  eval: true
+  echo: true
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+## About this page
+
+This page answers the four cohort questions for the soluble IL-2 receptor (sIL2R)
+project. Every number is an **aggregate** read from `cache/summary.rds`, which
+`R/build.R` writes locally from the RPDR extract and the ICI data pull. Counts from
+1 to 10 are shown as `<11`. Patient-level detail (EMPI, dates) stays in the local
+workbook `output/sIL2R_ICI_patient_level.xlsx` and is not part of this site.
+:::
+
+```{r}
+#| label: setup
+#| include: false
+suppressPackageStartupMessages({ library(data.table); library(knitr) })
+source("R/functions.R")
+have <- file.exists("cache/summary.rds")
+if (have) S <- readRDS("cache/summary.rds")
+```
+
+```{r}
+#| label: not-built
+#| echo: false
+#| output: asis
+if (!have) cat("::: {.callout-warning}\n## Pipeline has not been run\n",
+               "Run `Rscript R/build.R` locally, then re-render.\n:::\n")
+```
+
+```{r}
+#| label: not-built-exit
+#| include: false
+if (!have) knitr::knit_exit()
+a   <- S$answers
+N0  <- a[["post_cutoff_patients"]]
+N1  <- a[["q1_ici_before_draw"]]
+N2  <- a[["q2_ge2_after_ici"]]
+N3  <- a[["q3_not_in_ici_cohort"]]
+NB  <- a[["in_ici_not_before"]]
+pct <- function(n, d) formatC(100 * n / d, format = "f", digits = 1)
+## the draws-vs-days gap is itself a patient count: show it only when safe
+dq2 <- a[["q2_ge2_after_ici_draws"]] - N2
+q2_note <- if (dq2 == 0) " (the same if two draws on one day are counted separately)" else
+  if (dq2 >= SMALL_CELL) sprintf(" (%s if two draws on one day are counted separately)",
+                                 fmt_n(a[["q2_ge2_after_ici_draws"]])) else
+  " (fewer than 11 more if two draws on one day are counted separately)"
+```
+
+# 1 The requests, answered
+
+```{r}
+#| label: tbl-answers
+#| echo: false
+data.table(
+  Request = c("RPDR patients with a soluble IL2R result after 2015 (all-pre-2015 excluded)",
+              "... who had gotten an ICI (any dose) before an IL2R level was drawn",
+              "... of those, with at least 2 IL2R measurements after the ICI",
+              "... NOT found in the ICI cohort at all (chart-review candidates)"),
+  N   = fmt_n(c(N0, N1, N2, N3)),
+  `%` = c("", paste0(pct(N1, N0), "% of ", fmt_n(N0)),
+          paste0(pct(N2, N1), "% of ", fmt_n(N1)),
+          paste0(pct(N3, N0), "% of ", fmt_n(N0)))) |>
+  kable(caption = "Primary definitions (Section 2). 'After 2015' = drawn on or after 2015-01-01; 'before' = ICI start date strictly earlier than the IL2R draw date; a measurement = one draw date with a performed (not cancelled) result.")
+```
+
+The remaining `r fmt_n(NB)` patients are in the ICI cohort but started ICI on or
+after the date of every post-2015 IL2R draw, so
+`r fmt_n(N0)` = `r fmt_n(N1)` + `r fmt_n(NB)` + `r fmt_n(N3)`.
+
+**Not counted above:** `r fmt_n(S$excluded$n[1])` RPDR patients qualified through
+the Epic IL2R **order** code but have no IL2R result row, so they have no draw date
+and cannot be placed before or after ICI (Section 3). They split as follows.
+
+```{r}
+#| label: tbl-nolab
+#| echo: false
+S$nolab[, .(`IL2R order, no result row` = fifelse(in_ici_file, "In the ICI pull (request 1 status unknown)",
+                                                  "Not in the ICI pull (add to request 3 review)"),
+            Patients = fmt_n(patients),
+            `ICI in RPDR Med` = fmt_n_of(rpdr_ici_any, patients),
+            `Malignancy code` = fmt_n_of(cancer_dx_any, patients))] |>
+  kable(caption = "Patients without a draw date. Dating them needs the RPDR procedures (Prc) file for the same patient set, or chart review; they are listed in the local workbook (sheet no_IL2R_result_row).")
+```
+
+# 2 Definitions as implemented
+
+The code below is the **executed** definition, pulled verbatim from
+`R/functions.R` at render time — click **Show code** on any block.
+
+## 2.1 Soluble IL2R draws (RPDR Lab)
+
+An IL2R draw is any RPDR Lab row with `Group_Id` in the three sIL2R groups; the
+draw date is the date part of `Seq_Date_Time`. Each row is classified by its result:
+a numeric value in `Result`, a numeric value only in `Result_Text`, a result reported
+without a discrete value (e.g. *SEE MANUAL REPORT*), or cancelled / credited
+(*CREDITED: NO SPECIMEN RECEIVED*, *Refused*, …). Only the last class is **not** a
+measurement.
+
+```{r}
+#| label: def-il2r
+#| eval: false
+#| code: !expr src_of(c("IL2R_GROUPS", "CUTOFF_DATE", "CANCEL_REGEX", "classify_il2r_result"))
+```
+
+## 2.2 ICI start date (ICI data pull)
+
+On read, `EMPI MRN` (column G) is renamed to `EMPI` so it keys directly against the
+RPDR files, and `SCHEDULEDSTARTDTS` (raw `YYYY-MM-DDThh:mm:ssZ`) becomes a date
+(`YYYY-MM-DD`). Every row in the pull is a MAR *New Bag* administration, so every
+row is a dose given. The ICI start date is the earliest administration date, not
+counting blinded *"X OR PLACEBO"* trial products (the patient may have had placebo).
+
+```{r}
+#| label: def-ici
+#| eval: false
+#| code: !expr src_of(c("read_ici", "parse_ici_date", "is_blinded"))
+```
+
+## 2.3 Patient classification
+
+```{r}
+#| label: def-cohort
+#| eval: false
+#| code: !expr src_of(c("derive_cohort", "answer_counts"))
+```
+
+# 3 Cohort flow
+
+```{r}
+#| label: tbl-flow
+#| echo: false
+S$flow[, .(Step = step, N = fmt_n(n))] |>
+  kable(caption = "From the RPDR patient set to the post-2015 sIL2R cohort.")
+```
+
+```{r}
+#| label: tbl-excluded
+#| echo: false
+S$excluded[, .(`Not in the post-2015 cohort because` = reason, N = fmt_n(n))] |>
+  kable(caption = "Patients dropped at each step of the cohort flow above.")
+```
+
+::: {.callout-warning}
+## `r fmt_n(S$excluded$n[1])` RPDR patients have no IL2R result to date
+
+The RPDR query selected patients with an sIL2R **lab** result **or** the Epic
+**procedure (order) code** *Soluble Il 2r Alpha HC (MGH)*. The
+`r fmt_n(S$excluded$n[1])` patients who qualified only through the procedure code
+have no row in the Lab file, so there is no draw date to compare against ICI (see
+@tbl-nolab). The order code is an Epic code, so these orders are probably from the
+Epic era, but the extract does not date them. Timing them needs the RPDR
+**procedures** (`Prc`) file for the same patient set, or chart review.
+:::
+
+# 4 Request 1 — ICI before the IL2R draw
+
+```{r}
+#| label: tbl-groups
+#| echo: false
+g <- S$groups
+b2_note <- if (!GROUP_LEVELS[3] %in% as.character(g$group))
+  " Group B2 (only a blinded or-placebo trial product) is empty in this cohort." else ""
+data.table(Group = as.character(g$group), N = fmt_parts(g$N),
+           `%` = pct_shown(fmt_parts(g$N), g$N, sum(g$N))) |>
+  kable(caption = sprintf("Every patient in the post-2015 cohort (N = %s) falls in exactly one group.%s", fmt_n(N0), b2_note))
+```
+
+## 4.1 Time from ICI start to the first post-ICI draw
+
+```{r}
+#| label: tbl-time
+#| echo: false
+S$A_time_bins[, .(`ICI start to first IL2R draw` = as.character(bin),
+                  N = fmt_parts(N), `%` = pct_shown(fmt_parts(N), N, sum(N)))] |>
+  kable(caption = sprintf("Group A (N = %s). Median %s days (IQR %s-%s).",
+                          fmt_n(S$A_days_to_first$n), S$A_days_to_first$median,
+                          round(S$A_days_to_first$p25), round(S$A_days_to_first$p75)))
+```
+
+## 4.2 First ICI regimen
+
+```{r}
+#| label: tbl-first-drug
+#| echo: false
+fd <- collapse_small(S$A_first_regimen, "ici_first_regimen")
+fd[, .(`ICI given on the start date` = ici_first_regimen, N = fmt_parts(N),
+       `%` = pct_shown(fmt_parts(N), N, sum(N)))] |>
+  kable(caption = "Group A. Every ICI product given on the ICI start date, so combination starts (e.g. ipilimumab + nivolumab) show as one regimen; each product is labelled by the first ICI or fixed-dose co-formulation named in its description. Regimens with fewer than 11 patients are combined as 'Other'.")
+```
+
+## 4.3 Calendar year
+
+```{r}
+#| label: tbl-year
+#| echo: false
+yr <- copy(S$groups_by_first_year)
+yr[, period := fifelse(year <= 2020, "2015-2020", as.character(year))]
+cols <- setdiff(names(yr), c("year", "period"))
+yr <- yr[, lapply(.SD, sum), by = period, .SDcols = cols]
+setnames(yr, cols, sub("^([A-Z0-9]+)\\..*$", "Group \\1", cols))
+yr[, (2:ncol(yr)) := lapply(.SD, fmt_n), .SDcols = 2:ncol(yr)]
+setnames(yr, "period", "Year of first post-2015 IL2R draw")
+kable(yr, caption = "IL2R testing with a result in the Lab file is concentrated from 2021, when the Epic-coded assay (el:5200007493) begins; Group A therefore sits almost entirely in 2021 onward.")
+```
+
+# 5 Request 2 — at least two measurements after ICI
+
+**`r fmt_n(N2)`** of the `r fmt_n(N1)` patients in Group A had IL2R measured on at
+least two different days after the ICI start date`r q2_note`. Group A contributes
+`r fmt_n(S$A_measurements_total)` post-ICI measurement days in total.
+
+```{r}
+#| label: tbl-n-after
+#| echo: false
+na <- copy(S$A_n_after)
+na[, k := fifelse(n_after %in% c("4", "5+"), "4 or more", n_after)]
+na <- na[, .(N = sum(N)), by = k]
+na[, .(`Post-ICI IL2R measurement days` = k, N = fmt_parts(N), `%` = pct_shown(fmt_parts(N), N, sum(N)))] |>
+  kable(caption = sprintf("Group A (N = %s). 'At least 2' = the sum of the last three rows.", fmt_n(N1)))
+```
+
+# 6 Request 3 — not found in the ICI cohort
+
+**`r fmt_n(N3)`** of the `r fmt_n(N0)` post-2015 patients (`r pct(N3, N0)`%) have no
+record at all in the ICI data pull. Before deciding on chart review, two independent
+RPDR sources were checked for the same patients.
+
+```{r}
+#| label: tbl-med
+#| echo: false
+S$med_by_group[, .(Group = as.character(group), Patients = fmt_n(patients),
+      `ICI in RPDR Med (any time)` = fmt_n_of(rpdr_ici_any, patients),
+      `ICI in RPDR Med before last IL2R draw` = fmt_n_of(rpdr_ici_before_last_draw, patients))] |>
+  kable(caption = "Cross-check against the RPDR Med file: any ICI generic, sponsor code or brand name. 'suppressed' = the complement within the group is below 11.")
+```
+
+The RPDR medication file finds ICI in most of Group A, which shows it captures ICI
+exposure well — yet it finds ICI in almost none of Group C. As a second triage signal,
+every Group C patient was checked in the RPDR Dia file for a malignancy code
+(ICD-10 C00–C96 including C4A/C7A/C7B; ICD-9 140–209.3) and, failing that, a
+cancer-history or chemotherapy/immunotherapy code (Z85, Z51.1x, Z92.21; V10, V58.1x).
+All `r fmt_n(S$dx_by_group[group == GROUP_LEVELS[1], cancer_dx_any])` Group A
+patients have a malignancy code.
+
+```{r}
+#| label: tbl-triage
+#| echo: false
+S$C_triage[, .(`Chart-review tier (Group C)` = tier, N = fmt_parts(N), `%` = pct_shown(fmt_parts(N), N, sum(N)))] |>
+  kable(caption = sprintf("Group C (N = %s), hierarchical: each patient is placed in the first tier that applies.", fmt_n(N3)))
+```
+
+```{r}
+#| label: triage-n
+#| include: false
+tr <- setNames(S$C_triage$N, substr(S$C_triage$tier, 1, 1))
+medA <- S$med_by_group[group == GROUP_LEVELS[1]]
+```
+
+::: {.callout-tip}
+## Suggested chart-review scope
+
+The RPDR medication file records an ICI for `r pct(medA$rpdr_ici_any, medA$patients)`%
+of Group A, so it is a reasonable second net — and it finds ICI for only
+`r fmt_n(tr[["1"]])` Group C patients. Review those first. The
+`r fmt_n(tr[["2"]])` tier-2 patients (a malignancy code on or before the last IL2R
+draw) are where ICI given outside MGB, or before Epic, is still plausible. Tier-5
+patients (`r fmt_n(tr[["5"]])`) have no malignancy, cancer-history or chemotherapy
+code in RPDR, so ICI exposure is unlikely — though RPDR can miss cancer care given
+entirely outside MGB — and a small random sample of them would confirm that before
+skipping the rest.
+
+Also worth a look: `r fmt_n(S$B_rpdr_earlier)` Group B patients have an ICI in the
+RPDR medication file **before** their last IL2R draw, even though their first ICI in
+the pull comes later. They may belong in Group A.
+
+Group C tiers are in the local workbook (sheet `not_in_ICI_cohort`, column
+`review_tier`); the flagged Group B patients are in sheet `ICI_cohort_RPDR_ICI_earlier`.
+:::
+
+# 7 Sensitivity analyses
+
+```{r}
+#| label: tbl-sens
+#| echo: false
+sv   <- S$sensitivity
+cols <- c("post_cutoff_patients", "q1_ici_before_draw", "q2_ge2_after_ici", "q3_not_in_ici_cohort")
+out  <- copy(sv[, c("analysis", cols), with = FALSE])
+for (cc in cols) out[, (cc) := c(fmt_n(sv[[cc]][1]), fmt_delta(sv[[cc]][-1], sv[[cc]][1]))]
+## cohort = R1 + B + R3, so (change in cohort) - (change in R3) is the change in
+## ICI-pull patients; when that is 1-10 the cohort change is also hidden.
+d  <- function(cc) sv[[cc]][-1] - sv[[cc]][1]
+d_in <- d("post_cutoff_patients") - d("q3_not_in_ici_cohort")
+hide <- c(FALSE, abs(d_in) >= 1 & abs(d_in) < SMALL_CELL)
+out[hide, post_cutoff_patients := "suppressed"]
+setnames(out, c("Analysis", "Post-2015 cohort", "R1: ICI before draw",
+                "R2: >= 2 days after ICI", "R3: not in ICI cohort"))
+m12   <- max(abs(c(d("q1_ici_before_draw"), d("q2_ge2_after_ici"))))
+r3max <- sv$analysis[-1][which.max(abs(d("q3_not_in_ici_cohort")))]
+kable(out, caption = paste0(
+  "Primary row = counts; other rows = change from primary. Changes of 1-10 are shown as +/-<11, ",
+  "and a cohort change is 'suppressed' when it would reveal one by subtraction. R1 and R2 move by ",
+  if (m12 < SMALL_CELL) "fewer than 11 patients" else paste("up to", fmt_n(m12), "patients"),
+  " under every alternative definition; R3 moves most under '", r3max, "'."))
+```
+
+# 8 Caveats
+
+- **ICI coverage starts `r format(S$ici_date_range[1], "%B %Y")`.** The ICI pull
+  holds Epic MAR administrations from `r format(S$ici_date_range[1], "%B %Y")` to
+  `r format(S$ici_date_range[2], "%B %Y")`. ICI given before Epic, or outside
+  MGB, is not in it — which is what the RPDR medication check in Section 6 is for.
+- **IL2R results in the Lab file are uneven over time.** The Epic-coded assay
+  (el:5200007493) starts in `r S$il2_first_month_epic`; few results exist for
+  2018–2020, and the latest result in the extract is from `r S$il2_last_month`.
+  IL2R tests from those gaps may sit with the procedure-code-only patients, who have
+  an order but no result row (Section 3).
+- **Date resolution.** ICI start is a calendar date, so an IL2R drawn on the ICI
+  start day is counted as *not* after ICI (`r fmt_n(S$same_day_A + S$same_day_B)`
+  patients affected; see @tbl-sens, row 4).
+- **Units differ by assay** (pg/mL for the Epic-coded assay, U/mL for the older
+  mcsq/dcsqe assays). This does not affect any count here, but values must be
+  harmonised before they are compared.
+
+```{r}
+#| label: session
+#| echo: false
+#| output: asis
+cat("\n---\n\n*Aggregate results only; cells below 11 suppressed. Built from `R/build.R` on ",
+    format(S$built, "%Y-%m-%d"), ".*\n", sep = "")
+```
