@@ -101,7 +101,7 @@ y[, period := fcase(year <= 2014, "2005-2014", year %between% c(2018, 2020), "20
                     default = as.character(year))]
 y <- y[, .(records = sum(records)), by = period]
 y[, .(`Draw year` = period, `IL2R records` = fmt_n(records))] |>
-  kable(caption = "IL2R rows by year (all result classes). Results before 2015 are excluded from the cohort; the Epic-coded assay begins in 2021.")
+  kable(caption = "IL2R rows by year (all rows, numeric Result or not). Results before 2015 are excluded from the cohort; the Epic-coded assay begins in 2021.")
 ```
 
 # 4 Linkage
@@ -112,7 +112,7 @@ y[, .(`Draw year` = period, `IL2R records` = fmt_n(records))] |>
 data.table(
   Check = c("IL2R patients (Lab) not in the RPDR patient set",
             "Post-2015 IL2R patients found in the ICI pull",
-            "Patient-days with 2 or more performed IL2R results"),
+            "Patient-days with 2 or more numeric IL2R Results"),
   N = fmt_n(c(S$il2_not_in_set,
               S$answers[["post_cutoff_patients"]] - S$answers[["q3_not_in_ici_cohort"]],
               S$il2_same_day_multi))) |>

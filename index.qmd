@@ -31,9 +31,8 @@ the level was drawn**, and how many were measured more than once afterwards.
 #| echo: false
 if (have) data.table(
   Request = c("RPDR patient set (sIL2R lab result OR Epic sIL2R order code)",
-              "... with >= 1 sIL2R result row in the RPDR Lab file",
-              "... with >= 1 performed (not cancelled) sIL2R result",
-              "... with >= 1 performed result on/after 2015-01-01 (all-pre-2015 excluded)",
+              "... with >= 1 sIL2R row in the RPDR Lab file",
+              "... with >= 1 numeric sIL2R Result on/after 2015-01-01 (all-pre-2015 excluded)",
               "Request 1: had an ICI (any dose) before the sIL2R was drawn",
               "Request 2: ... and had at least 2 measurements after the ICI",
               "Request 3: post-2015 patients NOT found in the ICI cohort",

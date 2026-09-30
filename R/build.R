@@ -30,7 +30,7 @@ rpdr_set <- unique(mrn$EMPI)
 ## ---- 2. RPDR IL2R labs --------------------------------------------------------
 lab <- read_rpdr(rp("Lab"), select = c("EMPI", "Seq_Date_Time", "Group_Id", "Test_Id",
                                        "Loinc_Code", "Test_Description", "Result",
-                                       "Result_Text", "Reference_Units", "Abnormal_Flag"))
+                                       "Reference_Units", "Abnormal_Flag"))
 S$lab_rows     <- nrow(lab)
 S$lab_patients <- uniqueN(lab$EMPI)
 
@@ -40,9 +40,8 @@ S$lab_groups <- lab[, .(rows = .N, patients = uniqueN(EMPI)), by = Group_Id]
 rm(lab); invisible(gc())
 il2[, draw_date := parse_rpdr_date(Seq_Date_Time)]
 stopifnot(!anyNA(il2$draw_date))
-il2[, status := classify_il2r_result(Result, Result_Text)]
-il2[, value  := fifelse(status == STATUS_LEVELS[1], extract_num(Result),
-                fifelse(status == STATUS_LEVELS[2], extract_num(Result_Text), NA_real_))]
+il2[, status := classify_il2r_result(Result)]            # `Result` only; Result_Text not read
+il2[, value  := fifelse(status == STATUS_LEVELS[1], extract_num(Result), NA_real_)]
 il2[, unit := fifelse(Test_Id %chin% c("5200007493", "954.1945"), "pg/mL", "U/mL")]
 
 S$il2_tests <- il2[, .(records = .N, patients = uniqueN(EMPI),
@@ -51,13 +50,6 @@ S$il2_tests <- il2[, .(records = .N, patients = uniqueN(EMPI),
 S$il2_status <- il2[, .(records = .N, patients = uniqueN(EMPI)), by = status][order(status)]
 S$il2_status_by_test <- dcast(il2[, .N, by = .(Test_Id, status)], Test_Id ~ status,
                               value.var = "N", fill = 0L)
-## Short, digit-free status phrases behind the non-numeric classes (lab
-## vocabulary, not patient data); anything rarer/longer is only counted.
-nn <- il2[status %in% STATUS_LEVELS[3:4]]
-nn[, phrase := fifelse(!grepl("[0-9]", Result) & nchar(Result) <= 40,
-                       fifelse(nzchar(trimws(Result)), toupper(trimws(Result)), "(blank Result)"),
-                       "(other / free text)")]
-S$il2_nonnum_phrases <- nn[, .N, by = .(status, phrase)][order(status, -N)]
 ## numeric values: shape check (anything that is not "number [unit] [flag]")
 num <- il2[status == STATUS_LEVELS[1]]
 S$il2_numeric_irregular <- sum(!grepl("^\\s*[0-9]+(\\.[0-9]+)?(\\s+[A-Za-z/]+)?(\\s+[HL])?\\s*$", num$Result))
@@ -101,19 +93,22 @@ il2_pts  <- unique(il2$EMPI)
 valid_pts <- unique(il2[status %in% VALID_STATUS, EMPI])
 post_pts  <- unique(il2[status %in% VALID_STATUS & draw_date >= CUTOFF_DATE, EMPI])
 
+## Flow shows 3 steps only: an intermediate "any numeric Result" step would let
+## the (small) all-pre-2015 count be recovered by subtraction.
 S$flow <- data.table(
   step = c("RPDR patient set (IL2R lab OR Epic IL2R procedure code)",
-           "  with >=1 IL2R lab record in the Lab file",
-           "  with >=1 performed IL2R result (not cancelled/credited)",
-           "  with >=1 performed IL2R result on/after 2015-01-01"),
-  n = c(length(rpdr_set), length(il2_pts), length(valid_pts), length(post_pts)))
+           "  with >=1 IL2R row in the Lab file",
+           "  with >=1 numeric IL2R Result on/after 2015-01-01"),
+  n = c(length(rpdr_set), length(il2_pts), length(post_pts)))
 S$excluded <- data.table(
-  reason = c("In RPDR set, but no IL2R row in the Lab file (no draw date; see Section 3)",
-             "IL2R records all cancelled / credited",
-             "All performed IL2R values before 2015-01-01"),
-  n = c(sum(!rpdr_set %chin% il2_pts),
-        length(setdiff(il2_pts, valid_pts)),
-        length(setdiff(valid_pts, post_pts))))
+  reason = c("In RPDR set, but no IL2R row in the Lab file (no draw date)",
+             "IL2R rows, but no numeric Result on/after 2015-01-01"),
+  n = c(sum(!rpdr_set %chin% il2_pts), length(setdiff(il2_pts, post_pts))))
+## the two reasons inside row 2 (rendered with complementary suppression)
+S$excluded_sub <- data.table(
+  reason = c("... no numeric Result at any date",
+             "... numeric Results, but all before 2015-01-01"),
+  n = c(length(setdiff(il2_pts, valid_pts)), length(setdiff(valid_pts, post_pts))))
 S$no_lab_in_ici <- sum(!rpdr_set %chin% il2_pts & rpdr_set %chin% ici_empi)
 S$il2_not_in_set <- sum(!il2_pts %chin% rpdr_set)
 S$overlap_any_il2 <- sum(il2_pts %chin% ici_empi)
@@ -143,11 +138,10 @@ S$A_measurements_total <- A[, sum(n_after_dates)]
 ## ---- 5. Sensitivity grid -------------------------------------------------------
 sens <- list(
   "Primary"                                        = list(),
-  "Numeric results only"                           = list(valid_status = NUMERIC_ONLY),
   "Include blinded or-placebo trial drug"          = list(include_blinded = TRUE),
   "Same-day ICI counts as prior"                   = list(same_day_is_prior = TRUE),
   "Cutoff 2016-01-01 (after calendar 2015)"        = list(cutoff = as.Date("2016-01-01")),
-  "Every IL2R record (incl. cancelled)"            = list(valid_status = STATUS_LEVELS))
+  "Any IL2R row, numeric Result or not"            = list(valid_status = STATUS_LEVELS))
 S$sensitivity <- rbindlist(lapply(names(sens), function(nm) {
   p <- do.call(derive_cohort, c(list(il2 = il2, ici = ici), sens[[nm]]))
   as.data.table(c(list(analysis = nm), as.list(answer_counts(p))))
@@ -254,7 +248,7 @@ writexl::write_xlsx(list(
   README = data.frame(note = c(
     "LOCAL ONLY - contains EMPI. Do not email, upload or commit.",
     paste("Built", format(S$built, "%Y-%m-%d %H:%M"), "by R/build.R"),
-    "Cohort: >=1 performed soluble IL2R result on/after 2015-01-01 (RPDR Lab).",
+    "Cohort: >=1 soluble IL2R row with a numeric Result on/after 2015-01-01 (RPDR Lab; Result_Text not used).",
     "ICI start = earliest SCHEDULEDSTARTDTS (date) in ICI_data_pull, excluding blinded or-placebo products.",
     "ici_first_regimen = every ICI given on the ICI start date.",
     "rpdr_ici_* = ICI mentions in the RPDR Med file (independent of the ICI pull).",

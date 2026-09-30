@@ -58,15 +58,6 @@ ICI_GENERIC_MAP <- c(
   "zynyz" = "retifanlimab", "loqtorzi" = "toripalimab", "tevimbra" = "tislelizumab",
   "unloxcyt" = "cosibelimab")
 
-## IL2R result strings that mean the test was NOT performed.
-CANCEL_REGEX <- paste(c(
-  "credit", "refus", "cancel", "no specimen", "no spec\\.", "duplicate",
-  "wrong order", "not performed", "not done", "\\bqns\\b",
-  "quantity not sufficient", "insufficient", "not received", "reject",
-  "unacceptable", "unsatisfactory", "clotted", "hemoly", "specimen lost",
-  "lost specimen", "problem tube", "no longer needed", "reordered",
-  "discontinued", "incorrect(ly)? (order|collect|label)"), collapse = "|")
-
 ## Malignant neoplasm codes (RPDR Dia): ICD-10 C00-C96 incl. C4A/C7A/C7B;
 ## ICD-9 140-208 plus 209.0-209.3 (malignant neuroendocrine tumours).
 CANCER_ICD10 <- "^C(0[0-9]|[1-8][0-9A-Z]|9[0-6])"
@@ -79,10 +70,11 @@ CANCER_HX_ICD9  <- "^(V10|V58\\.?1)"
 ## Leading number, optionally with thousands separators ("12,345").
 NUM_REGEX <- "^\\s*[<>]?\\s*[0-9]+(,[0-9]{3})*(\\.[0-9]+)?"
 
-STATUS_LEVELS <- c("numeric (Result)", "numeric (Result_Text)",
-                   "reported, non-discrete", "cancelled / credited")
-VALID_STATUS  <- STATUS_LEVELS[1:3]   # a "measurement" = any non-cancelled result
-NUMERIC_ONLY  <- STATUS_LEVELS[1:2]   # sensitivity analysis
+## An IL2R measurement = a row whose `Result` starts with a number. Rows with a
+## blank or text-only `Result` (e.g. "SEE MANUAL REPORT", "CREDITED: ...") are
+## not measurements. `Result_Text` (free-text report) is not used.
+STATUS_LEVELS <- c("numeric Result", "no numeric Result")
+VALID_STATUS  <- STATUS_LEVELS[1]
 
 GROUP_LEVELS <- c(
   "A. ICI before >=1 post-2015 IL2R draw",
@@ -137,18 +129,10 @@ extract_num <- function(x) {
   out
 }
 
-## Classify every IL2R lab row into one of STATUS_LEVELS.
-classify_il2r_result <- function(result, result_text) {
-  result      <- fifelse(is.na(result), "", result)
-  result_text <- fifelse(is.na(result_text), "", result_text)
-  res_num <- grepl(NUM_REGEX, result)
-  txt_num <- grepl(NUM_REGEX, result_text)
-  cancel  <- !res_num & (grepl(CANCEL_REGEX, result, ignore.case = TRUE) |
-                         (!txt_num & grepl(CANCEL_REGEX, result_text, ignore.case = TRUE)))
-  factor(fcase(res_num,            STATUS_LEVELS[1],
-               cancel,             STATUS_LEVELS[4],
-               txt_num,            STATUS_LEVELS[2],
-               default =           STATUS_LEVELS[3]),
+## Classify every IL2R lab row from its `Result` field only.
+classify_il2r_result <- function(result) {
+  result <- fifelse(is.na(result), "", result)
+  factor(fifelse(grepl(NUM_REGEX, result), STATUS_LEVELS[1], STATUS_LEVELS[2]),
          levels = STATUS_LEVELS)
 }
 
