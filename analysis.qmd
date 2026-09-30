@@ -77,9 +77,10 @@ The remaining `r fmt_n(NB)` patients are in the ICI cohort but started ICI on or
 after the date of every post-2015 IL2R draw, so
 `r fmt_n(N0)` = `r fmt_n(N1)` + `r fmt_n(NB)` + `r fmt_n(N3)`.
 
-**Not counted above:** `r fmt_n(S$excluded$n[1])` RPDR patients qualified through
-the Epic IL2R **order** code but have no IL2R result row, so they have no draw date
-and cannot be placed before or after ICI (Section 3). They split as follows.
+**Not counted above:** `r fmt_n(S$excluded$n[1])` patients are in the RPDR patient
+set but have **no IL2R row in the RPDR Lab file**, so there is no draw date and they
+cannot be placed before or after ICI. Section 3.1 shows, file by file, where they come
+from. They split as follows.
 
 ```{r}
 #| label: tbl-nolab
@@ -150,17 +151,66 @@ S$excluded[, .(`Not in the post-2015 cohort because` = reason, N = fmt_n(n))] |>
   kable(caption = "Patients dropped at each step of the cohort flow above.")
 ```
 
-::: {.callout-warning}
-## `r fmt_n(S$excluded$n[1])` RPDR patients have no IL2R result to date
+## 3.1 The `r fmt_n(S$excluded$n[1])` patients with no IL2R result row
 
-The RPDR query selected patients with an sIL2R **lab** result **or** the Epic
-**procedure (order) code** *Soluble Il 2r Alpha HC (MGH)*. The
-`r fmt_n(S$excluded$n[1])` patients who qualified only through the procedure code
-have no row in the Lab file, so there is no draw date to compare against ICI (see
-@tbl-nolab). The order code is an Epic code, so these orders are probably from the
-Epic era, but the extract does not date them. Timing them needs the RPDR
-**procedures** (`Prc`) file for the same patient set, or chart review.
-:::
+The RPDR patient set and the RPDR lab results are two different things. The patient
+set (`Mrn` file) is everyone the RPDR **query** matched. The query matched a patient on
+**any one** of four criteria: three lab-test criteria and one Epic **procedure
+(order)** criterion. The `Lab` file then returns only discrete results for the four
+IL2R test codes that were requested. A patient who matched the query but has no
+result under those four codes appears in `Mrn` and not among the IL2R rows of `Lab`.
+
+```{r}
+#| label: tbl-nolab-trace
+#| echo: false
+pre <- sub("_\\{.*", "", S$files$rpdr)
+data.table(
+  Step = c("1. RPDR patient set",
+           "2. Why a patient is in the set",
+           "3. Has an IL2R result row",
+           "4. No IL2R result row (1 minus 3)",
+           "4a. ... has Lab rows, but creatinine only",
+           "4b. ... has no Lab rows at all",
+           "5. What is missing for them",
+           "6. Where a date could come from"),
+  File = c(paste0(pre, "_Mrn.txt"),
+           paste0(pre, "_Let.txt (RPDR query report)"),
+           paste0(pre, "_Lab.txt"),
+           "Mrn compared with Lab",
+           paste0(pre, "_Lab.txt"),
+           paste0(pre, "_Lab.txt"),
+           paste0(pre, "_Lab.txt"),
+           "RPDR Procedures file (Prc), not requested"),
+  `Variable(s)` = c("`Enterprise_Master_Patient_Index`",
+                    "Query criteria (any one is enough)",
+                    "`EMPI`; `Group_Id` in INTERL2-RS, INTERL2, IL2R-ALPHA",
+                    "`Enterprise_Master_Patient_Index` not among those `EMPI`",
+                    "`Group_Id` = CRE only",
+                    "--",
+                    "`Seq_Date_Time` (draw date), `Result`",
+                    "Procedure date and code (e.g. `Date`, `Procedure_Name`, `Code`)"),
+  Meaning = c("Every patient the RPDR query returned",
+              "(a) lab group IL2R-ALPHA; (b) lab test wc954.1945 (group INTERL2); (c) lab group INTERL2-RS; OR (d) Epic procedure 'Soluble Il 2r Alpha HC (MGH)'",
+              "At least one IL2R result under test el:5200007493, wc954.1945, mcsq-il2ra or dcsqe-il2ra",
+              "Matched the query, but no IL2R result was delivered",
+              "Only creatinine results were delivered for them",
+              "Nothing delivered in the Lab file",
+              "No IL2R row means no draw date and no value",
+              "Would date the Epic IL2R order (criterion d)"),
+  Patients = c(fmt_n(S$flow$n[1]), "", fmt_n(S$flow$n[2]), fmt_n(S$excluded$n[1]),
+               fmt_n(S$nolab_other_lab), fmt_n(S$nolab_no_lab), "", "")) |>
+  kable(caption = "How the RPDR files produce the patients with no IL2R result row. File prefix and variable names are exactly as in the extract.")
+```
+
+**Why they have no result row.** The most likely reason is criterion (d). The Epic
+procedure code records that the test was *ordered*, but it carries no result value.
+Send-out results that came back as scanned reports would look the same. The other
+possibility: a patient matched criterion (a) or (c) through a *different* test code
+in the same lab group, which the Lab extract did not include. This extract cannot
+tell the two apart. Either way, their IL2R draw date is unknown. To date them,
+request the RPDR **procedures (`Prc`)** file for the same patient set, and/or every
+test code in the IL2R-ALPHA and INTERL2-RS groups, or chart review them. They are
+listed in the local workbook (sheet `no_IL2R_result_row`).
 
 # 4 Request 1 — ICI before the IL2R draw
 
@@ -322,8 +372,8 @@ kable(out, caption = paste0(
 - **IL2R results in the Lab file are uneven over time.** The Epic-coded assay
   (el:5200007493) starts in `r S$il2_first_month_epic`; few results exist for
   2018–2020, and the latest result in the extract is from `r S$il2_last_month`.
-  IL2R tests from those gaps may sit with the procedure-code-only patients, who have
-  an order but no result row (Section 3).
+  IL2R tests from those gaps may belong to the patients with no IL2R result row
+  (Section 3.1).
 - **Date resolution.** ICI start is a calendar date, so an IL2R drawn on the ICI
   start day is counted as *not* after ICI (`r fmt_n(S$same_day_A + S$same_day_B)`
   patients affected; see @tbl-sens, row 4).

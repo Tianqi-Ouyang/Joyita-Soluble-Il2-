@@ -37,7 +37,7 @@ if (have) data.table(
               "Request 1: had an ICI (any dose) before the sIL2R was drawn",
               "Request 2: ... and had at least 2 measurements after the ICI",
               "Request 3: post-2015 patients NOT found in the ICI cohort",
-              "Order but no result row, not in the ICI cohort (undated)"),
+              "No IL2R result row (no draw date), not in the ICI cohort"),
   N = fmt_n(c(S$flow$n, a[["q1_ici_before_draw"]], a[["q2_ge2_after_ici"]],
               a[["q3_not_in_ici_cohort"]], S$nolab[in_ici_file == FALSE, patients]))) |>
   kable(caption = "Headline counts (primary definitions; see Analysis for definitions, sensitivity analyses and caveats).")

@@ -35,6 +35,8 @@ S$lab_rows     <- nrow(lab)
 S$lab_patients <- uniqueN(lab$EMPI)
 
 il2 <- lab[Group_Id %in% IL2R_GROUPS]
+lab_pts <- unique(lab$EMPI)                       # anyone with any Lab row (IL2R or CRE)
+S$lab_groups <- lab[, .(rows = .N, patients = uniqueN(EMPI)), by = Group_Id]
 rm(lab); invisible(gc())
 il2[, draw_date := parse_rpdr_date(Seq_Date_Time)]
 stopifnot(!anyNA(il2$draw_date))
@@ -106,7 +108,7 @@ S$flow <- data.table(
            "  with >=1 performed IL2R result on/after 2015-01-01"),
   n = c(length(rpdr_set), length(il2_pts), length(valid_pts), length(post_pts)))
 S$excluded <- data.table(
-  reason = c("In RPDR set, no IL2R lab record (qualified via procedure code only)",
+  reason = c("In RPDR set, but no IL2R row in the Lab file (no draw date; see Section 3)",
              "IL2R records all cancelled / credited",
              "All performed IL2R values before 2015-01-01"),
   n = c(sum(!rpdr_set %chin% il2_pts),
@@ -223,6 +225,8 @@ S$nolab <- nl[, .(patients = .N, rpdr_ici_any = sum(rpdr_ici_any),
                   cancer_or_hx = sum(cancer_dx_any | cancer_hx_any)),
               by = in_ici_file][order(-in_ici_file)]
 S$no_lab_cancer <- nl[, sum(cancer_dx_any)]
+S$nolab_other_lab <- nl[, sum(EMPI %chin% lab_pts)]   # Lab rows, but creatinine only
+S$nolab_no_lab    <- nl[, sum(!EMPI %chin% lab_pts)]  # no Lab rows at all
 
 S$il2_last_month <- format(max(il2$draw_date), "%Y-%m")
 S$il2_first_month_epic <- format(min(il2[Test_Id == "5200007493", draw_date]), "%Y-%m")
